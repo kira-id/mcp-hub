@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.1] - 2025-08-22
+
+### Fixed
+
+- **Workspace Cache Locking**: Improved lock file handling to prevent persistent deadlocks
+  - Increased lock retry delay from 50ms to 100ms for better stability
+  - Added automatic stale lock file cleanup after maximum retry attempts
+  - Implemented recursive retry mechanism with infinite loop protection
+  - Enhanced error messaging and logging for lock acquisition failures
+  - Resolves issue where crashed processes could leave persistent lock files blocking new hub instances
+
 ## [4.2.0] - 2025-07-20
 
 ### Added
