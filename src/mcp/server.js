@@ -489,8 +489,11 @@ export class MCPServerEndpoint {
     let clientInfo
 
 
-    // Setup cleanup on close
+    let cleanupCalled = false;
+    // Setup cleanup on close (ensure it only runs once)
     const cleanup = async () => {
+      if (cleanupCalled) return;
+      cleanupCalled = true;
       this.clients.delete(sessionId);
       try {
         await server.close();
@@ -674,4 +677,3 @@ export class MCPServerEndpoint {
     logger.info('MCP server endpoint closed');
   }
 }
-
