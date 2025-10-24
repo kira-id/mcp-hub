@@ -16,8 +16,10 @@ import {
 import { getMarketplace } from "./marketplace.js";
 import { MCPServerEndpoint } from "./mcp/server.js";
 import { WorkspaceCacheManager } from "./utils/workspace-cache.js";
+import { versionOrDefault } from "./utils/version.js";
 
 const SERVER_ID = "mcp-hub";
+const RUNTIME_VERSION = versionOrDefault();
 
 // Create Express app
 const app = express();
@@ -548,7 +550,7 @@ registerRoute("GET", "/health", "Check server health", async (req, res) => {
     status: "ok",
     state: serviceManager?.state || HubState.STARTING,
     server_id: SERVER_ID,
-    version: process.env.VERSION,
+    version: RUNTIME_VERSION,
     activeClients: serviceManager?.sseManager?.connections.size || 0,
     timestamp: new Date().toISOString(),
     servers: serviceManager?.mcpHub?.getAllServerStatuses() || [],
