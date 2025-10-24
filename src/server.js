@@ -342,22 +342,56 @@ registerRoute("GET", "/events", "Subscribe to server events", async (req, res) =
   }
 });
 
-// Register MCP SSE endpoint
+// Register unified MCP endpoint for both Streamable HTTP (new) and SSE (legacy)
+app.post("/mcp", async (req, res) => {
+  try {
+    if (!mcpServerEndpoint) {
+      throw new ServerError("MCP server endpoint not initialized");
+    }
+    // POST requests use Streamable HTTP transport (new protocol)
+    await mcpServerEndpoint.handleStreamableHTTP(req, res);
+  } catch (error) {
+    logger.warn(`Failed to handle MCP POST request: ${error.message}`);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: "2.0",
+        error: {
+          code: -32603,
+          message: "Internal error",
+        },
+        id: null,
+      });
+    }
+  }
+});
+
 app.get("/mcp", async (req, res) => {
   try {
     if (!mcpServerEndpoint) {
       throw new ServerError("MCP server endpoint not initialized");
     }
-    await mcpServerEndpoint.handleSSEConnection(req, res);
+
+    // Check if this is a Streamable HTTP GET (has Mcp-Session-Id header)
+    // or legacy SSE (Accept: text/event-stream header)
+    const sessionId = req.headers['mcp-session-id'];
+    const acceptsSSE = req.headers.accept?.includes('text/event-stream');
+
+    if (sessionId || !acceptsSSE) {
+      // Streamable HTTP GET request (for server-to-client messages in active session)
+      await mcpServerEndpoint.handleStreamableHTTP(req, res);
+    } else {
+      // Legacy SSE transport (backward compatibility)
+      await mcpServerEndpoint.handleSSEConnection(req, res);
+    }
   } catch (error) {
-    logger.warn(`Failed to setup MCP SSE connection: ${error.message}`)
+    logger.warn(`Failed to handle MCP GET request: ${error.message}`);
     if (!res.headersSent) {
       res.status(500).send('Error establishing MCP connection');
     }
   }
 });
 
-// Register MCP messages endpoint
+// Register legacy MCP messages endpoint (for SSE transport backward compatibility)
 app.post("/messages", async (req, res) => {
   try {
     if (!mcpServerEndpoint) {

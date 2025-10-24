@@ -30,6 +30,8 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { randomUUID } from "crypto";
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -514,6 +516,7 @@ export class MCPServerEndpoint {
 
   /**
    * Handle MCP messages (POST /messages)
+   * Legacy SSE transport endpoint
    */
   async handleMCPMessage(req, res) {
     const sessionId = req.query.sessionId;
@@ -539,6 +542,97 @@ export class MCPServerEndpoint {
     } else {
       logger.warn(`MCP message for unknown session: ${sessionId}`);
       return sendErrorResponse(404, new Error(`Session not found: ${sessionId}`));
+    }
+  }
+
+  /**
+   * Handle Streamable HTTP transport requests (new MCP protocol)
+   * Supports both POST and GET requests on a single endpoint
+   */
+  async handleStreamableHTTP(req, res) {
+    try {
+      // Check if this is for an existing session
+      const sessionId = req.headers['mcp-session-id'];
+
+      if (sessionId) {
+        // Reuse existing transport for this session
+        const clientInfo = this.clients.get(sessionId);
+        if (clientInfo) {
+          await clientInfo.transport.handleRequest(req, res, req.body);
+          return;
+        }
+        // Session not found - will create new one below
+        logger.debug(`Session ${sessionId} not found, creating new session`);
+      }
+
+      // Create new transport and server for new session
+      const transport = new StreamableHTTPServerTransport({
+        // Generate cryptographically secure session IDs
+        sessionIdGenerator: () => randomUUID(),
+
+        // DNS rebinding protection - disabled by default for local development
+        // Enable in production with appropriate allowedOrigins/allowedHosts configuration
+        enableDnsRebindingProtection: false,
+      });
+
+      // Create a new server instance for this session
+      const server = this.createServer();
+
+      let clientInfo;
+
+      // Setup cleanup for when transport closes
+      const cleanup = async () => {
+        if (transport.sessionId) {
+          this.clients.delete(transport.sessionId);
+        }
+        try {
+          await server.close();
+        } catch (error) {
+          logger.warn(`Error closing server: ${error.message}`);
+        } finally {
+          logger.info(`'${clientInfo?.name ?? "Unknown"}' client disconnected from MCP HUB (Streamable HTTP)`);
+        }
+      };
+
+      transport.onclose = cleanup;
+
+      // Connect MCP server to transport BEFORE handling the request
+      await server.connect(transport);
+
+      server.oninitialized = () => {
+        clientInfo = server.getClientVersion();
+        if (clientInfo) {
+          logger.info(`'${clientInfo.name}' client connected to MCP HUB (Streamable HTTP)`);
+        }
+      };
+
+      // Store transport and server together using the transport's session ID
+      // Note: sessionId will be set by the transport during handleRequest if it's an initialize request
+      const originalHandleRequest = transport.handleRequest.bind(transport);
+      transport.handleRequest = async (req, res, parsedBody) => {
+        await originalHandleRequest(req, res, parsedBody);
+        // After handling, if a session was created, store it
+        if (transport.sessionId && !this.clients.has(transport.sessionId)) {
+          logger.debug(`Streamable HTTP session created: ${transport.sessionId}`);
+          this.clients.set(transport.sessionId, { transport, server });
+        }
+      };
+
+      // Handle the HTTP request
+      await transport.handleRequest(req, res, req.body);
+
+    } catch (error) {
+      logger.warn(`Error handling Streamable HTTP request: ${error.message}`);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32603,
+            message: "Internal error",
+          },
+          id: null,
+        });
+      }
     }
   }
 
