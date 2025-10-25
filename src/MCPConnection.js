@@ -374,6 +374,20 @@ export class MCPConnection extends EventEmitter {
     try {
       return await this.client.request(...args);
     } catch (error) {
+      // Check if this is a connection-related error (transport closed)
+      if (error.message?.includes('Failed to send response') ||
+          error.message?.includes('Not connected') ||
+          error.message?.includes('transport closed')) {
+        logger.debug(`Connection error for server '${this.name}', marking as disconnected`);
+        this.status = ConnectionStatus.DISCONNECTED;
+        this.error = error.message;
+        this.startTime = null;
+        this.emit("connectionClosed", {
+          server: this.name,
+          type: this.transportType,
+          reason: "transport_error"
+        });
+      }
       throw wrapError(error, "RAW_REQUEST_ERROR", {
         server: this.name,
       });
@@ -422,6 +436,20 @@ export class MCPConnection extends EventEmitter {
         }
       }, GetPromptResultSchema, request_options);
     } catch (error) {
+      // Check if this is a connection-related error (transport closed)
+      if (error.message?.includes('Failed to send response') ||
+          error.message?.includes('Not connected') ||
+          error.message?.includes('transport closed')) {
+        logger.debug(`Connection error during prompt get for server '${this.name}', marking as disconnected`);
+        this.status = ConnectionStatus.DISCONNECTED;
+        this.error = error.message;
+        this.startTime = null;
+        this.emit("connectionClosed", {
+          server: this.name,
+          type: this.transportType,
+          reason: "transport_error"
+        });
+      }
       throw wrapError(error, "PROMPT_EXECUTION_ERROR", {
         server: this.name,
         prompt: promptName,
@@ -487,6 +515,20 @@ export class MCPConnection extends EventEmitter {
         request_options
       );
     } catch (error) {
+      // Check if this is a connection-related error (transport closed)
+      if (error.message?.includes('Failed to send response') ||
+          error.message?.includes('Not connected') ||
+          error.message?.includes('transport closed')) {
+        logger.debug(`Connection error during tool call for server '${this.name}', marking as disconnected`);
+        this.status = ConnectionStatus.DISCONNECTED;
+        this.error = error.message;
+        this.startTime = null;
+        this.emit("connectionClosed", {
+          server: this.name,
+          type: this.transportType,
+          reason: "transport_error"
+        });
+      }
       throw wrapError(error, "TOOL_EXECUTION_ERROR", {
         server: this.name,
         tool: toolName,
@@ -548,6 +590,20 @@ export class MCPConnection extends EventEmitter {
         request_options
       );
     } catch (error) {
+      // Check if this is a connection-related error (transport closed)
+      if (error.message?.includes('Failed to send response') ||
+          error.message?.includes('Not connected') ||
+          error.message?.includes('transport closed')) {
+        logger.debug(`Connection error during resource read for server '${this.name}', marking as disconnected`);
+        this.status = ConnectionStatus.DISCONNECTED;
+        this.error = error.message;
+        this.startTime = null;
+        this.emit("connectionClosed", {
+          server: this.name,
+          type: this.transportType,
+          reason: "transport_error"
+        });
+      }
       throw wrapError(error, "RESOURCE_READ_ERROR", {
         server: this.name,
         uri,
@@ -696,7 +752,11 @@ export class MCPConnection extends EventEmitter {
       requestInit: {
         headers: resolvedConfig.headers, // Already resolved with commands support
       },
-      // reconnectionOptions?: StreamableHTTPReconnectionOptions
+      // Increase session timeout to prevent premature disconnections (default appears to be ~2 minutes)
+      reconnectionOptions: {
+        maxReconnectionDelay: 30000, // 30 seconds max delay between reconnection attempts
+        sessionTimeout: 24 * 60 * 60 * 1000, // 24 hours session timeout instead of default ~2 minutes
+      },
       // sessionId?: string;
     }
     const transport = new StreamableHTTPClientTransport(new URL(resolvedConfig.url), options);

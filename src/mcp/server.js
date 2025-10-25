@@ -673,29 +673,23 @@ export class MCPServerEndpoint {
           return;
         }
 
-        // Per spec, reject requests for unknown sessions instead of silently creating a new one
+        // For recently closed sessions, allow reconnection by creating a new session
+        // This prevents the hub from appearing "dead" after session timeouts
         if (this.isRecentlyClosedSession(normalizedSessionId)) {
-          logger.debug(`Streamable HTTP request received for recently closed session '${normalizedSessionId}'`);
+          logger.debug(`Streamable HTTP reconnection attempt for recently closed session '${normalizedSessionId}' - creating new session`);
+          // Fall through to create new session below
         } else {
-          logger.debug(`Streamable HTTP request received for unknown session '${normalizedSessionId}'`);
+          logger.debug(`Streamable HTTP request received for unknown session '${normalizedSessionId}' - creating new session`);
+          // Fall through to create new session below
         }
-
-        if (!res.headersSent) {
-          res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({
-            jsonrpc: "2.0",
-            error: {
-              code: -32001,
-              message: "Session not found",
-            },
-            id: null,
-          }));
-        }
-        return;
       }
 
       // Create new transport and server for new session
       let transport;
       let server;
+
+      // For reconnection attempts with existing session ID, force creation of new session
+      const forceNewSession = !!normalizedSessionId && !this.clients.has(normalizedSessionId);
 
       const transportOptions = {
         // Generate cryptographically secure session IDs
@@ -711,6 +705,11 @@ export class MCPServerEndpoint {
           logger.debug(`Streamable HTTP session created: ${newSessionId}`);
           this.clearRecentlyClosedSession(newSessionId);
           this.clients.set(newSessionId, { transport, server });
+
+          // Log reconnection attempts
+          if (normalizedSessionId && normalizedSessionId !== newSessionId) {
+            logger.info(`Reconnected client with new session ${newSessionId}`);
+          }
         },
       };
 
