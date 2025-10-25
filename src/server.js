@@ -378,6 +378,17 @@ app.get("/mcp", async (req, res) => {
     const sessionId = req.headers['mcp-session-id'];
     const acceptsSSE = req.headers.accept?.includes('text/event-stream');
 
+    if (sessionId && mcpServerEndpoint.shouldDisableStandaloneStream(req)) {
+      if (typeof logger.debug === 'function') {
+        logger.debug('Streamable HTTP GET disabled for this request (proxy compatibility mode active)');
+      } else if (typeof logger.info === 'function') {
+        logger.info('Streamable HTTP GET disabled for this request (proxy compatibility mode active)');
+      }
+      res.setHeader('Allow', 'POST, DELETE');
+      res.status(405).send('Streamable HTTP GET not available through this proxy');
+      return;
+    }
+
     if (sessionId || !acceptsSSE) {
       // Streamable HTTP GET request (for server-to-client messages in active session)
       await mcpServerEndpoint.handleStreamableHTTP(req, res);

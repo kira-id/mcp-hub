@@ -38,3 +38,16 @@ MCP Hub uses chokidar for reliable file watching across different editors and pl
    echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf
    sudo sysctl -p
    ```
+
+## Cloudflare or Reverse Proxy Streaming Issues
+
+Some reverse proxies – especially Cloudflare tunnels – buffer Server-Sent Events (SSE) responses. When this happens, the MCP Streamable HTTP GET channel never delivers messages and Codex clients appear to hang.
+
+- The hub automatically detects Cloudflare headers (`cf-ray`, `cf-connecting-ip`, etc.) and forces Streamable HTTP sessions into JSON response mode while returning HTTP 405 for the optional GET stream. This keeps requests working even when streaming is blocked (asynchronous notifications may arrive only on the next request).
+- To override this behaviour, use the new environment variables:
+  - `MCP_HUB_STREAMABLE_HTTP_GET_MODE`: `auto` (default), `enabled`, or `disabled`.
+  - `MCP_HUB_STREAMABLE_HTTP_RESPONSE_MODE`: `auto` (default), `sse`, or `json`.
+- Set `MCP_HUB_STREAMABLE_HTTP_GET_MODE=disabled` if your proxy buffers GET SSE calls but still allows POST responses.
+- Set `MCP_HUB_STREAMABLE_HTTP_RESPONSE_MODE=json` to always return JSON responses (no streaming) for maximum compatibility.
+
+After changing these variables, restart the hub process or call the `/hard-restart` control endpoint so the new settings take effect.

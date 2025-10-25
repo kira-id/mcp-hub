@@ -57,6 +57,26 @@ const DELIMITER = '__';
 const MCP_REQUEST_TIMEOUT = 5 * 60 * 1000 //Default to 5 minutes
 const RECENTLY_CLOSED_SESSION_TTL_MS = 30_000;
 
+const normalizeMode = (value, allowed, fallback) => {
+  if (!value) {
+    return fallback;
+  }
+  const normalized = String(value).toLowerCase().trim();
+  return allowed.includes(normalized) ? normalized : fallback;
+};
+
+const STREAMABLE_HTTP_GET_MODE = normalizeMode(
+  process.env.MCP_HUB_STREAMABLE_HTTP_GET_MODE,
+  ['auto', 'enabled', 'disabled'],
+  'auto'
+);
+
+const STREAMABLE_HTTP_RESPONSE_MODE = normalizeMode(
+  process.env.MCP_HUB_STREAMABLE_HTTP_RESPONSE_MODE,
+  ['auto', 'sse', 'json'],
+  'auto'
+);
+
 // Comprehensive capability configuration
 const CAPABILITY_TYPES = {
   TOOLS: {
@@ -174,6 +194,46 @@ export class MCPServerEndpoint {
 
     // Initial capability registration
     this.syncCapabilities();
+  }
+
+  isLikelyCloudflareRequest(req) {
+    if (!req?.headers) {
+      return false;
+    }
+    const headers = req.headers;
+    return Boolean(
+      headers['cf-connecting-ip'] ||
+      headers['cf-visitor'] ||
+      headers['cf-ray'] ||
+      headers['cf-ew-via'] ||
+      headers['cf-worker'] ||
+      headers['cf-ipcountry']
+    );
+  }
+
+  shouldDisableStandaloneStream(req) {
+    if (STREAMABLE_HTTP_GET_MODE === 'disabled') {
+      return true;
+    }
+    if (STREAMABLE_HTTP_GET_MODE === 'enabled') {
+      return false;
+    }
+    return this.isLikelyCloudflareRequest(req);
+  }
+
+  shouldForceJsonResponse(req) {
+    if (STREAMABLE_HTTP_RESPONSE_MODE === 'json') {
+      return true;
+    }
+    if (STREAMABLE_HTTP_RESPONSE_MODE === 'sse') {
+      return false;
+    }
+    if (STREAMABLE_HTTP_RESPONSE_MODE === 'auto') {
+      if (this.shouldDisableStandaloneStream(req)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   getEndpointUrl() {
@@ -653,6 +713,17 @@ export class MCPServerEndpoint {
           this.clients.set(newSessionId, { transport, server });
         },
       };
+
+      const enableJsonResponse = this.shouldForceJsonResponse(req);
+      if (enableJsonResponse) {
+        transportOptions.enableJsonResponse = true;
+        const message = `Enabling Streamable HTTP JSON response mode for '${req.headers.host || 'unknown'}' session due to proxy compatibility`;
+        if (typeof logger.debug === 'function') {
+          logger.debug(message);
+        } else if (typeof logger.info === 'function') {
+          logger.info(message);
+        }
+      }
 
       // Create a new server instance for this session
       transport = new StreamableHTTPServerTransport(transportOptions);
