@@ -564,22 +564,46 @@ export class MCPServerEndpoint {
           await clientInfo.transport.handleRequest(req, res, req.body);
           return;
         }
-        // Session not found - will create new one below
-        logger.debug(`Session ${sessionId} not found, creating new session`);
+
+        // Per spec, reject requests for unknown sessions instead of silently creating a new one
+        logger.debug(`Streamable HTTP request received for unknown session '${sessionId}'`);
+
+        if (!res.headersSent) {
+          res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({
+            jsonrpc: "2.0",
+            error: {
+              code: -32001,
+              message: "Session not found",
+            },
+            id: null,
+          }));
+        }
+        return;
       }
 
       // Create new transport and server for new session
-      const transport = new StreamableHTTPServerTransport({
+      let transport;
+      let server;
+
+      const transportOptions = {
         // Generate cryptographically secure session IDs
         sessionIdGenerator: () => randomUUID(),
 
         // DNS rebinding protection - disabled by default for local development
         // Enable in production with appropriate allowedOrigins/allowedHosts configuration
         enableDnsRebindingProtection: false,
-      });
+        onsessioninitialized: (newSessionId) => {
+          if (!newSessionId) {
+            return;
+          }
+          logger.debug(`Streamable HTTP session created: ${newSessionId}`);
+          this.clients.set(newSessionId, { transport, server });
+        },
+      };
 
       // Create a new server instance for this session
-      const server = this.createServer();
+      transport = new StreamableHTTPServerTransport(transportOptions);
+      server = this.createServer();
 
       let clientInfo;
 
@@ -606,18 +630,6 @@ export class MCPServerEndpoint {
         clientInfo = server.getClientVersion();
         if (clientInfo) {
           logger.info(`'${clientInfo.name}' client connected to MCP HUB (Streamable HTTP)`);
-        }
-      };
-
-      // Store transport and server together using the transport's session ID
-      // Note: sessionId will be set by the transport during handleRequest if it's an initialize request
-      const originalHandleRequest = transport.handleRequest.bind(transport);
-      transport.handleRequest = async (req, res, parsedBody) => {
-        await originalHandleRequest(req, res, parsedBody);
-        // After handling, if a session was created, store it
-        if (transport.sessionId && !this.clients.has(transport.sessionId)) {
-          logger.debug(`Streamable HTTP session created: ${transport.sessionId}`);
-          this.clients.set(transport.sessionId, { transport, server });
         }
       };
 
