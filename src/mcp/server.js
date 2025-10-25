@@ -55,6 +55,7 @@ const HUB_INTERNAL_SERVER_NAME = "mcp-hub-internal-endpoint";
 // Delimiter for namespacing
 const DELIMITER = '__';
 const MCP_REQUEST_TIMEOUT = 5 * 60 * 1000 //Default to 5 minutes
+const RECENTLY_CLOSED_SESSION_TTL_MS = 30_000;
 
 // Comprehensive capability configuration
 const CAPABILITY_TYPES = {
@@ -160,6 +161,7 @@ export class MCPServerEndpoint {
     this.mcpHub = mcpHub;
     this.clients = new Map(); // sessionId -> { transport, server }
     this.serversMap = new Map(); // sessionId -> server instance
+    this.recentlyClosedSessions = new Map(); // sessionId -> timeout
 
     // Store registered capabilities by type
     this.registeredCapabilities = {};
@@ -468,6 +470,45 @@ export class MCPServerEndpoint {
     return this.clients.size > 0;
   }
 
+  normalizeSessionId(raw) {
+    if (Array.isArray(raw)) {
+      return raw[0];
+    }
+    return raw ?? undefined;
+  }
+
+  clearRecentlyClosedSession(sessionId) {
+    if (!sessionId) {
+      return;
+    }
+    const timer = this.recentlyClosedSessions.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.recentlyClosedSessions.delete(sessionId);
+    }
+  }
+
+  markSessionClosed(sessionId) {
+    if (!sessionId) {
+      return;
+    }
+    this.clearRecentlyClosedSession(sessionId);
+    const timeout = setTimeout(() => {
+      this.recentlyClosedSessions.delete(sessionId);
+    }, RECENTLY_CLOSED_SESSION_TTL_MS);
+    if (typeof timeout.unref === 'function') {
+      timeout.unref();
+    }
+    this.recentlyClosedSessions.set(sessionId, timeout);
+  }
+
+  isRecentlyClosedSession(sessionId) {
+    if (!sessionId) {
+      return false;
+    }
+    return this.recentlyClosedSessions.has(sessionId);
+  }
+
 
 
 
@@ -479,6 +520,7 @@ export class MCPServerEndpoint {
     // Create SSE transport
     const transport = new SSEServerTransport('/messages', res);
     const sessionId = transport.sessionId;
+    this.clearRecentlyClosedSession(sessionId);
 
     // Create a new server instance for this connection
     const server = this.createServer();
@@ -495,6 +537,7 @@ export class MCPServerEndpoint {
       if (cleanupCalled) return;
       cleanupCalled = true;
       this.clients.delete(sessionId);
+      this.markSessionClosed(sessionId);
       try {
         await server.close();
       } catch (error) {
@@ -522,7 +565,7 @@ export class MCPServerEndpoint {
    * Legacy SSE transport endpoint
    */
   async handleMCPMessage(req, res) {
-    const sessionId = req.query.sessionId;
+    const sessionId = this.normalizeSessionId(req.query.sessionId);
     function sendErrorResponse(code, error) {
       res.status(code).json({
         jsonrpc: "2.0",
@@ -543,6 +586,10 @@ export class MCPServerEndpoint {
     if (transportInfo) {
       await transportInfo.transport.handlePostMessage(req, res, req.body);
     } else {
+      if (this.isRecentlyClosedSession(sessionId)) {
+        logger.debug(`MCP message received for recently closed session: ${sessionId}`);
+        return sendErrorResponse(404, new Error(`Session closed: ${sessionId}`));
+      }
       logger.warn(`MCP message for unknown session: ${sessionId}`);
       return sendErrorResponse(404, new Error(`Session not found: ${sessionId}`));
     }
@@ -556,17 +603,22 @@ export class MCPServerEndpoint {
     try {
       // Check if this is for an existing session
       const sessionId = req.headers['mcp-session-id'];
+      const normalizedSessionId = this.normalizeSessionId(sessionId);
 
-      if (sessionId) {
+      if (normalizedSessionId) {
         // Reuse existing transport for this session
-        const clientInfo = this.clients.get(sessionId);
+        const clientInfo = this.clients.get(normalizedSessionId);
         if (clientInfo) {
           await clientInfo.transport.handleRequest(req, res, req.body);
           return;
         }
 
         // Per spec, reject requests for unknown sessions instead of silently creating a new one
-        logger.debug(`Streamable HTTP request received for unknown session '${sessionId}'`);
+        if (this.isRecentlyClosedSession(normalizedSessionId)) {
+          logger.debug(`Streamable HTTP request received for recently closed session '${normalizedSessionId}'`);
+        } else {
+          logger.debug(`Streamable HTTP request received for unknown session '${normalizedSessionId}'`);
+        }
 
         if (!res.headersSent) {
           res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({
@@ -597,6 +649,7 @@ export class MCPServerEndpoint {
             return;
           }
           logger.debug(`Streamable HTTP session created: ${newSessionId}`);
+          this.clearRecentlyClosedSession(newSessionId);
           this.clients.set(newSessionId, { transport, server });
         },
       };
@@ -611,6 +664,7 @@ export class MCPServerEndpoint {
       const cleanup = async () => {
         if (transport.sessionId) {
           this.clients.delete(transport.sessionId);
+          this.markSessionClosed(transport.sessionId);
         }
         try {
           await server.close();
@@ -682,6 +736,10 @@ export class MCPServerEndpoint {
     }
 
     this.clients.clear();
+    for (const timeout of this.recentlyClosedSessions.values()) {
+      clearTimeout(timeout);
+    }
+    this.recentlyClosedSessions.clear();
 
     // Clear all registered capabilities
     Object.values(this.registeredCapabilities).forEach(map => map.clear());
