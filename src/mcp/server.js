@@ -56,6 +56,13 @@ const HUB_INTERNAL_SERVER_NAME = "mcp-hub-internal-endpoint";
 const DELIMITER = '__';
 const MCP_REQUEST_TIMEOUT = 5 * 60 * 1000 //Default to 5 minutes
 const RECENTLY_CLOSED_SESSION_TTL_MS = 30_000;
+const TRANSPORT_SEND_WRAPPED = Symbol('TRANSPORT_SEND_WRAPPED');
+const DISCONNECT_ERROR_PATTERNS = [
+  'Not connected',
+  'write after end',
+  'ERR_STREAM_WRITE_AFTER_END',
+  'No connection established'
+];
 
 const normalizeMode = (value, allowed, fallback) => {
   if (!value) {
@@ -271,6 +278,54 @@ export class MCPServerEndpoint {
     this.setupRequestHandlers(server);
 
     return server;
+  }
+
+  isDisconnectError(error) {
+    if (!error) {
+      return false;
+    }
+    const message = typeof error.message === 'string' ? error.message : String(error);
+    if (!message) {
+      return false;
+    }
+    if (error.code === 'ERR_STREAM_WRITE_AFTER_END') {
+      return true;
+    }
+    return DISCONNECT_ERROR_PATTERNS.some(pattern => message.includes(pattern));
+  }
+
+  wrapTransportSend(transport, cleanup) {
+    if (!transport || typeof transport.send !== 'function') {
+      return;
+    }
+    if (transport[TRANSPORT_SEND_WRAPPED]) {
+      return;
+    }
+    const originalSend = transport.send.bind(transport);
+    transport.send = async (...args) => {
+      try {
+        return await originalSend(...args);
+      } catch (error) {
+        if (this.isDisconnectError(error)) {
+          const sessionId = transport.sessionId;
+          if (typeof logger.debug === 'function') {
+            logger.debug(`Ignoring transport send after disconnect for session '${sessionId ?? 'unknown'}': ${error.message}`);
+          }
+          if (typeof cleanup === 'function') {
+            try {
+              await cleanup();
+            } catch (cleanupError) {
+              if (typeof logger.debug === 'function') {
+                logger.debug(`Cleanup error after disconnect for session '${sessionId ?? 'unknown'}': ${cleanupError.message}`);
+              }
+            }
+          }
+          return;
+        }
+        throw error;
+      }
+    };
+    transport[TRANSPORT_SEND_WRAPPED] = true;
   }
 
   /**
@@ -585,9 +640,6 @@ export class MCPServerEndpoint {
     // Create a new server instance for this connection
     const server = this.createServer();
 
-    // Store transport and server together
-    this.clients.set(sessionId, { transport, server });
-
     let clientInfo
 
 
@@ -606,6 +658,11 @@ export class MCPServerEndpoint {
         logger.info(`'${clientInfo?.name ?? "Unknown"}' client disconnected from MCP HUB`);
       }
     };
+
+    // Store transport and server together
+    this.clients.set(sessionId, { transport, server });
+
+    this.wrapTransportSend(transport, cleanup);
 
     res.on("close", cleanup);
     transport.onclose = cleanup;
@@ -744,6 +801,8 @@ export class MCPServerEndpoint {
           logger.info(`'${clientInfo?.name ?? "Unknown"}' client disconnected from MCP HUB (Streamable HTTP)`);
         }
       };
+
+      this.wrapTransportSend(transport, cleanup);
 
       transport.onclose = cleanup;
 
