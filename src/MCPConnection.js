@@ -737,8 +737,52 @@ export class MCPConnection extends EventEmitter {
     const stderrStream = transport.stderr;
     if (stderrStream) {
       stderrStream.on("data", (data) => {
-        const errorOutput = data.toString().trim();
-        logger.warn(`${this.name} stderr: ${errorOutput}`)
+        const rawOutput = data.toString();
+        if (!rawOutput) {
+          return;
+        }
+
+        rawOutput
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .forEach((line) => {
+            let logLevel = "info";
+            let logMessage = line;
+            let logData = {};
+
+            if (line.startsWith("{") && line.endsWith("}")) {
+              try {
+                const parsed = JSON.parse(line);
+                const { message: parsedMessage, level: parsedLevel, ...rest } = parsed;
+                logMessage = parsedMessage || line;
+                logData = Object.keys(rest).length ? rest : {};
+                if (parsedLevel && ["debug", "info", "warn", "error"].includes(parsedLevel)) {
+                  logLevel = parsedLevel === "error" ? "warn" : parsedLevel;
+                }
+              } catch {
+                // Fall back to heuristic-based level detection on malformed JSON
+              }
+            } else {
+              const lowerLine = line.toLowerCase();
+              if (/(error|exception|traceback|failed|fatal)/.test(lowerLine)) {
+                logLevel = "warn";
+              } else if (/(warn|warning)/.test(lowerLine)) {
+                logLevel = "warn";
+              } else if (/(debug)/.test(lowerLine)) {
+                logLevel = "debug";
+              }
+            }
+
+            const formattedMessage = `${this.name} stderr: ${logMessage}`;
+            if (logLevel === "debug") {
+              logger.debug(formattedMessage, logData);
+            } else if (logLevel === "warn") {
+              logger.warn(formattedMessage, logData);
+            } else {
+              logger.info(formattedMessage, logData);
+            }
+          });
       });
     }
     return transport
