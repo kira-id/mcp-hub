@@ -247,6 +247,43 @@ export class MCPServerEndpoint {
     return `${this.mcpHub.hubServerUrl}/mcp`;
   }
 
+  buildInstructions() {
+    this.syncServersMap();
+
+    const lines = [
+      "MCP Hub aggregates multiple MCP servers behind a single MCP endpoint.",
+      "Tools, resources, prompts, and templates are namespaced as <serverId>__<name>. Use the full identifier when invoking a capability.",
+    ];
+
+    const activeServers = Array.from(this.serversMap.entries()).filter(([, connection]) =>
+      connection.status === "connected" && !connection.disabled
+    );
+
+    if (activeServers.length === 0) {
+      lines.push("No MCP servers are currently connected. Connect servers to expose their tools through the hub.");
+    } else {
+      lines.push("Connected servers (identifier -> display name and capability counts):");
+      activeServers.forEach(([serverId, connection]) => {
+        const displayName = connection.displayName || connection.name;
+        const toolCount = Array.isArray(connection.tools) ? connection.tools.length : 0;
+        const resourceCount = Array.isArray(connection.resources) ? connection.resources.length : 0;
+        const promptCount = Array.isArray(connection.prompts) ? connection.prompts.length : 0;
+        const templateCount = Array.isArray(connection.resourceTemplates) ? connection.resourceTemplates.length : 0;
+
+        const capabilitySummary = [`${toolCount} tools`, `${resourceCount} resources`];
+        if (templateCount > 0) {
+          capabilitySummary.push(`${templateCount} resource templates`);
+        }
+        capabilitySummary.push(`${promptCount} prompts`);
+
+        lines.push(`- ${serverId} -> ${displayName} (${capabilitySummary.join(", ")})`);
+      });
+      lines.push("Call tools using the namespaced identifier, for example `context7__search`, and run `tools/list` to review the live catalog.");
+    }
+
+    return lines.join("\n");
+  }
+
   /**
    * Create a new MCP server instance for each connection
    */
@@ -269,6 +306,7 @@ export class MCPServerEndpoint {
             listChanged: true,
           },
         },
+        instructions: this.buildInstructions(),
       }
     );
     server.onerror = function(err) {
