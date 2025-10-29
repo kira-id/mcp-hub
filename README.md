@@ -10,8 +10,6 @@ MCP Hub acts as a central coordinator for MCP servers and clients, providing two
 
 This dual-interface approach means you can manage servers through the Hub's UI while MCP clients (Claude Desktop, Cline, etc.) only need to connect to one endpoint (`localhost:37373/mcp`) to access all capabilities. Implements [MCP 2025-03-26](https://modelcontextprotocol.io/specification/2025-03-26) specification.
 
-===
-
 This is a fork of https://github.com/ravitemer/mcp-hub with fixes of HTTP Streaming for Codex CLI, bugs related to sessions, etc. This repository should be stable and working for your purpose. However, if you find errors, please feel free to raise an issue.
 
 ## Feature Support
