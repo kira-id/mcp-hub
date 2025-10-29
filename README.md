@@ -1,7 +1,6 @@
 # MCP Hub 
 
 [![npm version](https://badge.fury.io/js/mcp-hub.svg)](https://www.npmjs.com/package/mcp-hub)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
 
 MCP Hub acts as a central coordinator for MCP servers and clients, providing two key interfaces:
@@ -10,6 +9,10 @@ MCP Hub acts as a central coordinator for MCP servers and clients, providing two
 2. **MCP Server Interface** (/mcp): Connect ANY MCP client to access ALL server capabilities through a single endpoint
 
 This dual-interface approach means you can manage servers through the Hub's UI while MCP clients (Claude Desktop, Cline, etc.) only need to connect to one endpoint (`localhost:37373/mcp`) to access all capabilities. Implements [MCP 2025-03-26](https://modelcontextprotocol.io/specification/2025-03-26) specification.
+
+===
+
+This is a fork of https://github.com/ravitemer/mcp-hub with fixes of HTTP Streaming for Codex CLI, bugs related to sessions, etc. This repository should be stable and working for your purpose. However, if you find errors, please feel free to raise an issue.
 
 ## Feature Support
 
